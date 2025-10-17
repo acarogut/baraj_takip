@@ -1,20 +1,25 @@
-import csv
 import time
-from typing import List, Dict, Optional
-
-import requests
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter, Retry
 from selenium import webdriver
 
-driver = webdriver.Chrome()  # ChromeDriver PATH’in ayarlı olmalı
-driver.get("https://iski.istanbul/baraj-doluluk/")
+driverIst = webdriver.Chrome()
+driverIst.get("https://iski.istanbul/baraj-doluluk/")
 
-time.sleep(5)  # JS yüklenmesi için bekle
-html = driver.page_source
+driverBursa = webdriver.Chrome()
+driverBursa.get("https://www.buski.gov.tr/baraj-detay")
 
-soup = BeautifulSoup(html, "html.parser")
-ratio = soup.find("div", class_="text-4xl font-bold absolute").get_text(strip=True)
-print("Baraj Doluluk Oranı:", ratio)
+time.sleep(5)
 
-driver.quit()
+# İstanbul 
+soup1 = BeautifulSoup(driverIst.page_source, "html.parser")
+ratio1 = soup1.find("div", class_="text-4xl font-bold absolute").get_text(strip=True)
+
+# Bursa
+soup2 = BeautifulSoup(driverBursa.page_source, "html.parser")
+ratio2 = soup2.find("span", {"id": "baraj-doluluk-1-info"}).get_text(strip=True)
+
+print("İstanbul Baraj Doluluk Oranı:", ratio1)
+print("Bursa Baraj Doluluk Oranı:", ratio2)
+
+driverIst.quit()
+driverBursa.quit()
