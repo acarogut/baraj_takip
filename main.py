@@ -1,6 +1,8 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import re
+import json
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -24,6 +26,11 @@ try:
         print("\033[93m.env bulunamadı veya yüklenemedi; ortam değişkenleri eksik olabilir.\033[0m")
 except Exception:
     print("\033[93mpython-dotenv yüklü değil; .env okunamadı. X paylaşımı devre dışı kalabilir.\033[0m")
+
+try:
+    import requests  # type: ignore
+except Exception:
+    requests = None
 
 
 options = Options()
@@ -306,4 +313,169 @@ if tmpl:
         .replace("{{IZMIR}}", f"{ratio3_num:.2f}")
         .replace("{{ANKARA}}", f"{ratio4_num:.2f}")
     )
-post_image_to_x(png_path, tweet_text)
+
+# AccuWeather 15 günlük tahminleri çek ve JSON olarak kaydet
+
+def _accu_url_defaults():
+    return {
+        "Istanbul": os.getenv("ACCU_IST_URL", "https://www.accuweather.com/tr/tr/istanbul/318251/daily-weather-forecast/318251"),
+        "Bursa": os.getenv("ACCU_BURSA_URL", "https://www.accuweather.com/tr/tr/bursa/316938/daily-weather-forecast/316938"),
+        "İzmir": os.getenv("ACCU_IZMIR_URL", "https://www.accuweather.com/tr/tr/izmir/318316/daily-weather-forecast/318316"),
+        "Ankara": os.getenv("ACCU_ANKARA_URL", "https://www.accuweather.com/tr/tr/ankara/316938/daily-weather-forecast/316938"),
+    }
+
+def _parse_accu_15day(html):
+    bs = BeautifulSoup(html, "html.parser")
+    cards = []
+    for sel in [
+        'a.daily-forecast-card', 'div.daily-forecast-card', 'li.daily-forecast-card',
+        '[data-qa="daily-card"]', 'a[data-qa="daily-card"]', 'li[data-qa="daily-card"]',
+        'div.forecast-list a', 'li.daily-card', 'div.daily-list a'
+    ]:
+        cards = bs.select(sel)
+        if len(cards) >= 7:
+            break
+    out = []
+    for i, c in enumerate(cards[:15]):
+        text = c.get_text(" ", strip=True)
+        m_high = re.search(r"(?:(?:High|Maks\.|En Yüksek|Yüksek)\s*:?\s*)?(-?\d{1,2})°", text)
+        highs = re.findall(r"(-?\d{1,2})°", text)
+        if len(highs) >= 2:
+            try:
+                h = int(highs[0]); l = int(highs[1])
+            except Exception:
+                h = int(highs[0]); l = None
+        else:
+            h = int(m_high.group(1)) if m_high else None
+            l = None
+        m_prec = re.search(r"(\d{1,2})%", text)
+        precip = int(m_prec.group(1)) if m_prec else None
+        out.append({"day_index": i+1, "text": text[:200], "high_c": h, "low_c": l, "precip_pct": precip})
+    return out
+
+def fetch_accuweather_15day(city, url):
+    if requests is None:
+        print("requests kütüphanesi yok; AccuWeather alınamadı")
+        return []
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/119.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Cache-Control": "no-cache",
+        }
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            print(f"\033[93mAccuWeather {city} için beklenmeyen durum kodu: {resp.status_code}\033[0m")
+            return []
+        return _parse_accu_15day(resp.text)
+    except Exception as e:
+        print(f"\033[93mAccuWeather {city} verisi alınamadı: {e}\033[0m")
+        return []
+
+def fetch_all_accuweather():
+    urls = _accu_url_defaults()
+    out = {}
+    for city, url in urls.items():
+        out[city] = fetch_accuweather_15day(city, url)
+    return out
+
+def save_weather_json(weather_by_city, filename=None):
+    try:
+        if filename is None:
+            filename = f"accuweather_15day_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(weather_by_city, f, ensure_ascii=False, indent=2)
+        print(f"AccuWeather 15 günlük veriler '{filename}' dosyasına kaydedildi.")
+        return filename
+    except Exception as e:
+        print(f"\033[91mJSON kaydı başarısız: {e}\033[0m")
+        return None
+
+def deepseek_summary_week(current_levels, weather_by_city):
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key or requests is None:
+        return None
+    payload = {
+        "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        "temperature": 0.3,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Sen bir baraj su seviyesi tahmin asistanısın. "
+                    "Istanbul, Bursa, İzmir, Ankara için mevcut su seviyeleri ve 15 günlük hava durumu (özellikle yağış) göz önünde bulundurarak tam 2 hafta sonraki gün için baraj doluluk tahmininde bulun."
+                    "Tahminini yaparken insanların eş zamanlı olarak su kullanacaklarını unutma"
+                    "Aralık verme direkt net bir yüzdelik ver."
+                    "Cevabını direkt olarak sadece yüzdelik olarak ver, ek açıklama yapma."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "current_levels_pct": current_levels,
+                        "weather_15day": weather_by_city,
+                        "window_days": 7,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(payload),
+            timeout=25,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        msg = data.get("choices", [{}])[0].get("message", {}).get("content")
+        if not msg:
+            return None
+        msg = " ".join(msg.strip().split())
+        words = msg.split()
+        if len(words) > 50:
+            msg = " ".join(words[:50])
+        prefix = "Yapay zeka yorumu (tamamen AI tahmini):"
+        if not msg.startswith(prefix):
+            msg = f"{prefix} {msg}"
+        return msg
+    except Exception:
+        return None
+
+# Fetch weather, build AI summary, then post tweet and save JSON
+try:
+    weather_by_city = fetch_all_accuweather()
+    # Derle mevcut baraj oranları
+    current_levels = {
+        "İstanbul": round(float(ratio1_num), 2),
+        "Bursa": round(float(ratio2_num), 2),
+        "İzmir": round(float(ratio3_num), 2),
+        "Ankara": round(float(ratio4_num), 2),
+    }
+    ai_note = deepseek_summary_week(current_levels, weather_by_city)
+    if ai_note:
+        # Mevcut metne ekle, 270 karakteri aşma
+        base = tweet_text
+        sep = " — "
+        available = 270 - len(base) - len(sep)
+        if available > 10:
+            tweet_text = base + sep + ai_note[:available]
+        else:
+            tweet_text = base
+    # Artık paylaş
+    post_image_to_x(png_path, tweet_text)
+    # JSON kaydet
+    save_weather_json(weather_by_city)
+except Exception as e:
+    print(f"\033[93mAccuWeather/DeepSeek işlemi sırasında hata: {e}\033[0m")
