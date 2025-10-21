@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import re
 import json
@@ -313,7 +313,6 @@ if tmpl:
         .replace("{{IZMIR}}", f"{ratio3_num:.2f}")
         .replace("{{ANKARA}}", f"{ratio4_num:.2f}")
     )
-post_image_to_x(png_path, tweet_text)
 
 # AccuWeather 15 günlük tahminleri çek ve JSON olarak kaydet
 
@@ -396,8 +395,87 @@ def save_weather_json(weather_by_city, filename=None):
         print(f"\033[91mJSON kaydı başarısız: {e}\033[0m")
         return None
 
+def deepseek_summary_week(current_levels, weather_by_city):
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key or requests is None:
+        return None
+    payload = {
+        "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        "temperature": 0.3,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Sen bir baraj su seviyesi tahmin asistanısın. "
+                    "Istanbul, Bursa, İzmir, Ankara için mevcut su seviyeleri ve 15 günlük hava durumu (özellikle yağış) göz önünde bulundurarak tam 2 hafta sonraki gün için baraj doluluk tahmininde bulun."
+                    "Tahminini yaparken insanların eş zamanlı olarak su kullanacaklarını unutma"
+                    "Aralık verme direkt net bir yüzdelik ver."
+                    "Cevabını direkt olarak sadece yüzdelik olarak ver, ek açıklama yapma."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "current_levels_pct": current_levels,
+                        "weather_15day": weather_by_city,
+                        "window_days": 7,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    try:
+        resp = requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(payload),
+            timeout=25,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        msg = data.get("choices", [{}])[0].get("message", {}).get("content")
+        if not msg:
+            return None
+        msg = " ".join(msg.strip().split())
+        words = msg.split()
+        if len(words) > 50:
+            msg = " ".join(words[:50])
+        prefix = "Yapay zeka yorumu (tamamen AI tahmini):"
+        if not msg.startswith(prefix):
+            msg = f"{prefix} {msg}"
+        return msg
+    except Exception:
+        return None
+
+# Fetch weather, build AI summary, then post tweet and save JSON
 try:
     weather_by_city = fetch_all_accuweather()
+    # Derle mevcut baraj oranları
+    current_levels = {
+        "İstanbul": round(float(ratio1_num), 2),
+        "Bursa": round(float(ratio2_num), 2),
+        "İzmir": round(float(ratio3_num), 2),
+        "Ankara": round(float(ratio4_num), 2),
+    }
+    ai_note = deepseek_summary_week(current_levels, weather_by_city)
+    if ai_note:
+        # Mevcut metne ekle, 270 karakteri aşma
+        base = tweet_text
+        sep = " — "
+        available = 270 - len(base) - len(sep)
+        if available > 10:
+            tweet_text = base + sep + ai_note[:available]
+        else:
+            tweet_text = base
+    # Artık paylaş
+    post_image_to_x(png_path, tweet_text)
+    # JSON kaydet
     save_weather_json(weather_by_city)
 except Exception as e:
-    print(f"\033[93mAccuWeather işlemi sırasında hata: {e}\033[0m")
+    print(f"\033[93mAccuWeather/DeepSeek işlemi sırasında hata: {e}\033[0m")
