@@ -6,8 +6,18 @@ import json
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+import requests
+import tweepy
+import matplotlib
 
+plt = None
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
+from dotenv import load_dotenv
+load_dotenv()
+
+#Yardımcı fonksiyonlar
 def log(message: str) -> None:
     timestamp = datetime.now().strftime("%H:%M:%S")
     print(f"[{timestamp}] {message}")
@@ -37,32 +47,6 @@ def _sum_row(row) -> float:
         except ValueError:
             continue
     return total
-
-
-plt = None
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-except ImportError:
-    log("\033[93mMatplotlib bulunamadı; grafik oluşturulamayacak.\033[0m")
-
-try:
-    import tweepy
-except ImportError:
-    tweepy = None
-
-try:
-    from dotenv import load_dotenv
-    if not load_dotenv():
-        log("\033[93m.env bulunamadı veya yüklenemedi; ortam değişkenleri eksik olabilir.\033[0m")
-except ImportError:
-    log("\033[93mpython-dotenv yüklü değil; .env okunamadı. X paylaşımı devre dışı kalabilir.\033[0m")
-
-try:
-    import requests
-except ImportError:
-    requests = None
 
 
 options = Options()
@@ -107,10 +91,7 @@ log(f"İzmir Baraj Doluluk Oranı %{ratio3_num:.2f}")
 soup4 = BeautifulSoup(driverAnkara.page_source, "html.parser")
 ratio4_node = soup4.find("label", {"id": "LabelBarajOrani"})
 ratio4_num = parse_percentage(ratio4_node.get_text(strip=True) if ratio4_node else "", 0.0)
-if ratio4_node:
-    log(f"Ankara Baraj Doluluk Oranı %{ratio4_num:.2f}")
-else:
-    log("\033[91mAnkara verisi alınamadı\033[0m")
+log(f"Ankara Baraj Doluluk Oranı %{ratio4_num:.2f}")
 
 
 def create_bar_chart(ist, bursa, izmir, ankara):
@@ -362,16 +343,12 @@ def fetch_all_accuweather():
     return out
 
 def save_weather_json(weather_by_city, filename=None):
-    try:
-        if filename is None:
-            filename = f"accuweather_15day_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(weather_by_city, f, ensure_ascii=False, indent=2)
-        log(f"AccuWeather 15 günlük veriler '{filename}' dosyasına kaydedildi.")
-        return filename
-    except Exception as e:
-        log(f"\033[91mJSON kaydı başarısız: {e}\033[0m")
-        return None
+    if filename is None:
+        filename = f"accuweather_15day_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(weather_by_city, f, ensure_ascii=False, indent=2)
+    log(f"AccuWeather 15 günlük veriler '{filename}' dosyasına kaydedildi.")
+    return filename
 
 def deepseek_summary_week(current_levels, weather_by_city):
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -390,7 +367,11 @@ def deepseek_summary_week(current_levels, weather_by_city):
                     "Aralık verme direkt net bir yüzdelik ver."
                     "Cevabını Türkçe ver."
                     "Daha inandırıcı olması için açıklama yapabilirsin."
+                    "Markdown formatında cevap ver."
                     "Örnek cevap: Hali hazırda alınan tasarruf önlemleri, İstanbul ilinin günlük su tüketimi, 14 günlük detaylı hava durumu, yağışların bölgeleri ve oranları baz alınarak 12 Kasım 2025 tarihinde İstanbul baraj doluluk oranı %41 seviyelerinde olacaktır."
+                    "Baraj doluluk oranı tahmini yaparken yağmurun etkisini abartma. Yağışın barajlara etkisi genellikle sınırlıdır çünkü şehir ve toprak yüzeyleri suyun büyük kısmını emer veya akışa geçirir. 5 gün boyunca aralıksız yağmur yağsa bile, baraj doluluk oranı en fazla %0.2 – %0.3 artar. Gerçek doluluk artışında asıl belirleyici faktör kar yağışı ve bu karın erime sürecidir. Bu nedenle kısa vadeli (örneğin 1–5 günlük) yağmurlu hava tahminleri baraj seviyesini ciddi ölçüde değiştirmez."
+		            "Model, tahmin üretirken yağmurun etkisini düşük; kar yağışının etkisini ise yüksek ağırlıkla değerlendirmelidir."
+	            	"Ayrıca kar erimesi dönemlerinde (özellikle sıcaklık 0°C’nin üstüne çıktığında) doluluk oranında artışlar beklenmelidir."
                 ),
             },
             {
@@ -406,51 +387,41 @@ def deepseek_summary_week(current_levels, weather_by_city):
             },
         ],
     }
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(payload),
-            timeout=25,
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        msg = data.get("choices", [{}])[0].get("message", {}).get("content")
-        if not msg:
-            return None
-        msg = " ".join(msg.strip().split())
-        words = msg.split()
-        if len(words) > 50:
-            msg = " ".join(words[:50])
-        prefix = "Yapay zeka yorumu (tamamen AI tahmini):"
-        if not msg.startswith(prefix):
-            msg = f"{prefix} {msg}"
-        return msg
-    except Exception:
+    resp = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(payload),
+        timeout=25,
+    )
+    if resp.status_code != 200:
         return None
+    data = resp.json()
+    msg = data.get("choices", [{}])[0].get("message", {}).get("content")
+    if not msg:
+        return None
+    return " ".join(msg.strip().split())
 
-try:
-    weather_by_city = fetch_all_accuweather()
-    current_levels = {
-        "İstanbul": round(float(ratio1_num), 2),
-        "Bursa": round(float(ratio2_num), 2),
-        "İzmir": round(float(ratio3_num), 2),
-        "Ankara": round(float(ratio4_num), 2),
-    }
-    ai_note = deepseek_summary_week(current_levels, weather_by_city)
-    if ai_note:
-        base = tweet_text
-        sep = " — "
-        available = 270 - len(base) - len(sep)
-        if available > 10:
-            tweet_text = base + sep + ai_note[:available]
-        else:
-            tweet_text = base
-    post_image_to_x(png_path, tweet_text)
-    save_weather_json(weather_by_city)
-except Exception as e:
-    log(f"\033[93mAccuWeather/DeepSeek işlemi sırasında hata: {e}\033[0m")
+weather_by_city = fetch_all_accuweather()
+weather_json_path = save_weather_json(weather_by_city)
+with open(weather_json_path, "r", encoding="utf-8") as weather_file:
+    weather_for_ai = json.load(weather_file)
+
+current_levels = {
+    "İstanbul": round(float(ratio1_num), 2),
+    "Bursa": round(float(ratio2_num), 2),
+    "İzmir": round(float(ratio3_num), 2),
+    "Ankara": round(float(ratio4_num), 2),
+}
+ai_note = deepseek_summary_week(current_levels, weather_for_ai)
+if ai_note:
+    ts_iso = datetime.now()
+    ts_display = ts_iso.strftime("%Y-%m-%d %H:%M:%S")
+    txt_filename = f"deepseek_summary_{ts_iso.strftime('%Y%m%d_%H%M%S')}.md"
+    with open(txt_filename, "w", encoding="utf-8") as txt_file:
+        txt_file.write(f"# Yapay Zeka Tahmini ({ts_display})\n\n")
+        txt_file.write(ai_note + "\n")
+    log(f"AI tahmini '{txt_filename}' dosyasına kaydedildi.")
+post_image_to_x(png_path, tweet_text)
