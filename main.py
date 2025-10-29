@@ -1,36 +1,52 @@
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import re
 import json
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-except Exception:
-    plt = None
-    print("\033[93mMatplotlib bulunamadı; grafik oluşturulamayacak.\033[0m")
+import requests
+import tweepy
+import matplotlib
 
-try:
-    import tweepy  # type: ignore
-except Exception:
-    tweepy = None
+plt = None
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
-try:
-    from dotenv import load_dotenv  # type: ignore
-    loaded = load_dotenv()
-    if not loaded:
-        print("\033[93m.env bulunamadı veya yüklenemedi; ortam değişkenleri eksik olabilir.\033[0m")
-except Exception:
-    print("\033[93mpython-dotenv yüklü değil; .env okunamadı. X paylaşımı devre dışı kalabilir.\033[0m")
+from dotenv import load_dotenv
+load_dotenv()
 
-try:
-    import requests  # type: ignore
-except Exception:
-    requests = None
+#Yardımcı fonksiyonlar
+def log(message: str) -> None:
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}")
+
+
+def parse_percentage(text: str, default: float = 0.0) -> float:
+    try:
+        cleaned = text.replace("%", "").replace(",", ".").strip()
+        return float(cleaned)
+    except (AttributeError, ValueError):
+        return default
+
+
+def _sum_row(row) -> float:
+    if not row:
+        return 0.0
+    parent = row.find_parent("tr")
+    if parent is None:
+        return 0.0
+    total = 0.0
+    for cell in parent.find_all("td", class_="damtotaltd"):
+        value = cell.get_text(strip=True)
+        if not value:
+            continue
+        try:
+            total += float(value.replace(".", "").replace(",", "."))
+        except ValueError:
+            continue
+    return total
 
 
 options = Options()
@@ -53,59 +69,29 @@ driverIzmir.get("https://www.izsu.gov.tr/tr/BarajlarinSuDurumu/1")
 
 time.sleep(2)
 
-ratio1_num = 0
-ratio2_num = 0
-ratio3_num = 0
-ratio4_num = 0
+soup1 = BeautifulSoup(driverIst.page_source, "html.parser")
+ratio1_node = soup1.find("div", class_="text-4xl font-bold absolute")
+ratio1_num = parse_percentage(ratio1_node.get_text(strip=True) if ratio1_node else "", 0.0)
+log(f"İstanbul Baraj Doluluk Oranı %{ratio1_num:.2f}")
 
-try: 
-    soup1 = BeautifulSoup(driverIst.page_source, "html.parser")
-    ratio1 = soup1.find("div", class_="text-4xl font-bold absolute").get_text(strip=True)
-    ratio1_num = float(ratio1.replace('%', '').replace(',', '.'))
-except Exception as e:
-    pass
-print("İstanbul Baraj Doluluk Oranı: %", ratio1_num)
+soup2 = BeautifulSoup(driverBursa.page_source, "html.parser")
+ratio2_node = soup2.find("span", {"id": "baraj-doluluk-1-info"})
+ratio2_num = parse_percentage(ratio2_node.get_text(strip=True) if ratio2_node else "", 0.0)
+log(f"Bursa Baraj Doluluk Oranı %{ratio2_num:.2f}")
 
-try:
-    soup2 = BeautifulSoup(driverBursa.page_source, "html.parser")
-    ratio2 = soup2.find("span", {"id": "baraj-doluluk-1-info"}).get_text(strip=True)
-    ratio2_num = float(ratio2.replace('%', '').replace(',', '.'))
-except Exception as e:
-    pass
-print("Bursa Baraj Doluluk Oranı: %", ratio2_num)
-    
+soup3 = BeautifulSoup(driverIzmir.page_source, "html.parser")
+toplam_row = soup3.find("span", string=lambda x: x and "Kullanılabilir göl su hacmi" in x)
+kullanilabilir_row = soup3.find("span", string=lambda x: x and "Kullanılabilir su hacmi" in x)
 
-try:
-    soup3 = BeautifulSoup(driverIzmir.page_source, "html.parser")
+toplam_sum = _sum_row(toplam_row)
+kullanilabilir_sum = _sum_row(kullanilabilir_row)
+ratio3_num = round(kullanilabilir_sum / toplam_sum * 100, 2) if toplam_sum else 0.0
+log(f"İzmir Baraj Doluluk Oranı %{ratio3_num:.2f}")
 
-    toplam_row = soup3.find("span", string=lambda x: x and "Kullanılabilir göl su hacmi" in x).find_parent("tr")
-    toplam_values = [
-        float(td.get_text(strip=True).replace('.', '').replace(',', '.'))
-        for td in toplam_row.find_all("td", class_="damtotaltd") if td.get_text(strip=True)
-    ]
-    toplam_sum = sum(toplam_values)
-    kullanilabilir_row = soup3.find("span", string=lambda x: x and "Kullanılabilir su hacmi" in x).find_parent("tr")
-    kullanilabilir_values = [
-        float(td.get_text(strip=True).replace('.', '').replace(',', '.'))
-        for td in kullanilabilir_row.find_all("td", class_="damtotaltd") if td.get_text(strip=True)
-    ]
-    kullanilabilir_sum = sum(kullanilabilir_values)
-
-    ratio3 = round( kullanilabilir_sum / toplam_sum * 100,2)
-    ratio3_num = ratio3
-except Exception as e:
-    pass
-print("İzmir Baraj Doluluk Oranı: %", ratio3_num)
-
-
-try:
-    soup4 = BeautifulSoup(driverAnkara.page_source, "html.parser")
-    ratio4 = soup4.find("label", {"id": "LabelBarajOrani"}).get_text(strip=True)
-    ratio4_num = float(ratio4.replace('%', '').replace(',', '.'))
-    print("Ankara Baraj Doluluk Oranı: %", ratio4_num)
-
-except Exception as e:
-    print("\033[91mAnkara verisi alınamadı\033[0m")
+soup4 = BeautifulSoup(driverAnkara.page_source, "html.parser")
+ratio4_node = soup4.find("label", {"id": "LabelBarajOrani"})
+ratio4_num = parse_percentage(ratio4_node.get_text(strip=True) if ratio4_node else "", 0.0)
+log(f"Ankara Baraj Doluluk Oranı %{ratio4_num:.2f}")
 
 
 def create_bar_chart(ist, bursa, izmir, ankara):
@@ -133,7 +119,7 @@ def create_bar_chart(ist, bursa, izmir, ankara):
     import matplotlib.cm as cm
     import matplotlib.colors as mcolors
     norm = mcolors.Normalize(vmin=0, vmax=100)
-    cmap = cm.get_cmap("RdYlGn")  # 0: kırmızı, 100: yeşil
+    cmap = plt.colormaps["RdYlGn"]
     colors = [cmap(norm(v)) for v in values]
 
     bars = ax.bar(cities, values, color=colors, edgecolor="#1b1e23", linewidth=0.6, zorder=3)
@@ -176,29 +162,18 @@ def create_bar_chart(ist, bursa, izmir, ankara):
     fig.tight_layout(pad=1.5)
     fig.savefig(filename)
     plt.close(fig)
-    print(f"Grafik '{filename}' olarak kaydedildi (sıralı ve şık).")
+    log(f"Grafik '{filename}' olarak kaydedildi.")
     return filename
 
-
 def post_image_to_x(image_path, text):
-    """X (Twitter) API ile görseli paylaş. .env ile yapılandırılır.
-
-    Gerekli env değişkenleri:
-      - X_POST_ENABLED: true/false (varsayılan false)
-      - X_TEXT_ONLY: true/false (sadece metin paylaş, varsayılan false)
-      - X_API_KEY
-      - X_API_SECRET
-      - X_ACCESS_TOKEN
-      - X_ACCESS_TOKEN_SECRET
-    """
     enabled = os.getenv("X_POST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     text_only = os.getenv("X_TEXT_ONLY", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
-        print("X paylaşımı devre dışı (X_POST_ENABLED=false).")
+        log("X paylaşımı devre dışı (X_POST_ENABLED=false).")
         return
 
     if tweepy is None:
-        print("\033[93mTweepy yüklü değil; X paylaşımı atlandı.\033[0m")
+        log("\033[93mTweepy yüklü değil; X paylaşımı atlandı.\033[0m")
         return
 
     api_key = os.getenv("X_API_KEY")
@@ -207,91 +182,77 @@ def post_image_to_x(image_path, text):
     access_secret = os.getenv("X_ACCESS_TOKEN_SECRET")
 
     if not all([api_key, api_secret, access_token, access_secret]):
-        print("\033[93mX API kimlik bilgileri eksik; paylaşım atlandı.\033[0m")
+        log("\033[93mX API kimlik bilgileri eksik; paylaşım atlandı.\033[0m")
         return
 
     try:
         auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_secret)
         api = tweepy.API(auth)
+    except Exception as exc:
+        log(f"\033[91mX paylaşımı için kimlik doğrulama yapılamadı: {exc}\033[0m")
+        return
 
-        try:
-            me = api.verify_credentials()
-            if me:
-                print(f"X kimlik doğrulama OK: @{getattr(me, 'screen_name', 'unknown')}")
-        except Exception as auth_err:
-            print("\033[93mv1.1 kimlik doğrulama başarısız; v2 ile deneme yapılacak.\033[0m")
-            print(f"\033[93mDetay: {auth_err}\033[0m")
+    client = None
+    try:
+        client = tweepy.Client(
+            consumer_key=api_key,
+            consumer_secret=api_secret,
+            access_token=access_token,
+            access_token_secret=access_secret,
+        )
+    except Exception:
+        client = None
 
-        text = (text or "").strip()[:270]
-        if not text:
-            text = "Baraj doluluk oranları"
+    prepared_text = (text or "").strip()[:270]
+    if not prepared_text:
+        prepared_text = "Baraj doluluk oranları"
 
-        if text_only:
+    if text_only:
+        if client:
             try:
-                client = tweepy.Client(
-                    consumer_key=api_key,
-                    consumer_secret=api_secret,
-                    access_token=access_token,
-                    access_token_secret=access_secret,
-                )
-                resp = client.create_tweet(text=text)
-                if resp and getattr(resp, 'data', None):
-                    print("X metin paylaşımı yapıldı (v2 / 2:tweets).")
+                resp = client.create_tweet(text=prepared_text)
+                if resp and getattr(resp, "data", None):
+                    log("X metin paylaşımı yapıldı (v2).")
                     return
-                else:
-                    print("\033[93mv2 create_tweet beklenen yanıtı döndürmedi; v1.1 denenecek.\033[0m")
-            except Exception as v2_only_err:
-                print(f"\033[93mv2 metin paylaşımı başarısız: {v2_only_err}; v1.1 denenecek.\033[0m")
-
-            try:
-                api.update_status(status=text)
-                print("X metin paylaşımı yapıldı (v1.1).")
-            except Exception as v11_only_err:
-                print(f"\033[91mX metin paylaşımı başarısız (v1.1): {v11_only_err}\033[0m")
-            return
-
+            except Exception as exc:
+                log(f"\033[93mv2 metin paylaşımı başarısız: {exc}\033[0m")
         try:
-            media = api.media_upload(image_path)
-        except Exception as mu_err:
-            print(f"\033[93mMedya yükleme başarısız: {mu_err}; metin-only paylaşım deneniyor.\033[0m")
-            try:
-                client = tweepy.Client(
-                    consumer_key=api_key,
-                    consumer_secret=api_secret,
-                    access_token=access_token,
-                    access_token_secret=access_secret,
-                )
-                resp = client.create_tweet(text=text)
-                if resp and getattr(resp, 'data', None):
-                    print("X metin paylaşımı yapıldı (v2 / fallback).")
-                else:
-                    print("\033[91mMetin paylaşımı fallback yanıtı beklenen formatta değil.\033[0m")
-            except Exception as fb_err:
-                print(f"\033[91mMetin paylaşımı fallback da başarısız: {fb_err}\033[0m")
-            return
+            api.update_status(status=prepared_text)
+            log("X metin paylaşımı yapıldı (v1.1).")
+        except Exception as exc:
+            log(f"\033[91mX metin paylaşımı başarısız: {exc}\033[0m")
+        return
 
-        try:
-            api.update_status(status=text, media_ids=[media.media_id])
-            print("X paylaşımı yapıldı (v1.1).")
-        except Exception as post_err:
-            msg = str(post_err)
-            print(f"\033[93mv1.1 paylaşım başarısız, v2 ile denenecek. Detay: {msg}\033[0m")
+    try:
+        media = api.media_upload(image_path)
+    except Exception as exc:
+        log(f"\033[93mMedya yükleme başarısız: {exc}\033[0m")
+        if client:
             try:
-                client = tweepy.Client(
-                    consumer_key=api_key,
-                    consumer_secret=api_secret,
-                    access_token=access_token,
-                    access_token_secret=access_secret,
-                )
-                resp = client.create_tweet(text=text, media_ids=[media.media_id])
-                if resp and getattr(resp, 'data', None):
-                    print("X paylaşımı yapıldı (v2 / 2:tweets + media).")
+                resp = client.create_tweet(text=prepared_text)
+                if resp and getattr(resp, "data", None):
+                    log("X metin paylaşımı yapıldı (v2).")
+                    return
+            except Exception as fallback_err:
+                log(f"\033[91mMetin paylaşımı fallback başarısız: {fallback_err}\033[0m")
+        return
+
+    try:
+        api.update_status(status=prepared_text, media_ids=[media.media_id])
+        log("X paylaşımı yapıldı (v1.1).")
+    except Exception as exc:
+        exc_text = str(exc)
+        if "403 Forbidden" not in exc_text or "453" not in exc_text:
+            log(f"\033[93mv1.1 paylaşım başarısız: {exc_text}; v2 denenecek.\033[0m")
+        if client:
+            try:
+                resp = client.create_tweet(text=prepared_text, media_ids=[media.media_id])
+                if resp and getattr(resp, "data", None):
+                    log("X paylaşımı yapıldı (v2).")
                 else:
-                    print("\033[91mv2 create_tweet beklenen yanıtı döndürmedi.\033[0m")
+                    log("\033[91mv2 paylaşım beklenen yanıtı döndürmedi.\033[0m")
             except Exception as v2_err:
-                print(f"\033[91mX paylaşımı başarısız (v2): {v2_err}\033[0m")
-    except Exception as e:
-        print(f"\033[91mX paylaşımı başarısız: {e}\033[0m")
+                log(f"\033[91mX paylaşımı başarısız (v2): {v2_err}\033[0m")
 
 
 driverIst.quit()
@@ -313,8 +274,6 @@ if tmpl:
         .replace("{{IZMIR}}", f"{ratio3_num:.2f}")
         .replace("{{ANKARA}}", f"{ratio4_num:.2f}")
     )
-
-# AccuWeather 15 günlük tahminleri çek ve JSON olarak kaydet
 
 def _accu_url_defaults():
     return {
@@ -343,7 +302,7 @@ def _parse_accu_15day(html):
         if len(highs) >= 2:
             try:
                 h = int(highs[0]); l = int(highs[1])
-            except Exception:
+            except ValueError:
                 h = int(highs[0]); l = None
         else:
             h = int(m_high.group(1)) if m_high else None
@@ -355,7 +314,7 @@ def _parse_accu_15day(html):
 
 def fetch_accuweather_15day(city, url):
     if requests is None:
-        print("requests kütüphanesi yok; AccuWeather alınamadı")
+        log("requests kütüphanesi yok; AccuWeather alınamadı")
         return []
     try:
         headers = {
@@ -369,11 +328,11 @@ def fetch_accuweather_15day(city, url):
         }
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code != 200:
-            print(f"\033[93mAccuWeather {city} için beklenmeyen durum kodu: {resp.status_code}\033[0m")
+            log(f"\033[93mAccuWeather {city} için beklenmeyen durum kodu: {resp.status_code}\033[0m")
             return []
         return _parse_accu_15day(resp.text)
     except Exception as e:
-        print(f"\033[93mAccuWeather {city} verisi alınamadı: {e}\033[0m")
+        log(f"\033[93mAccuWeather {city} verisi alınamadı: {e}\033[0m")
         return []
 
 def fetch_all_accuweather():
@@ -384,16 +343,12 @@ def fetch_all_accuweather():
     return out
 
 def save_weather_json(weather_by_city, filename=None):
-    try:
-        if filename is None:
-            filename = f"accuweather_15day_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(weather_by_city, f, ensure_ascii=False, indent=2)
-        print(f"AccuWeather 15 günlük veriler '{filename}' dosyasına kaydedildi.")
-        return filename
-    except Exception as e:
-        print(f"\033[91mJSON kaydı başarısız: {e}\033[0m")
-        return None
+    if filename is None:
+        filename = f"accuweather_15day_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(weather_by_city, f, ensure_ascii=False, indent=2)
+    log(f"AccuWeather 15 günlük veriler '{filename}' dosyasına kaydedildi.")
+    return filename
 
 def deepseek_summary_week(current_levels, weather_by_city):
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -406,11 +361,17 @@ def deepseek_summary_week(current_levels, weather_by_city):
             {
                 "role": "system",
                 "content": (
-                    "Sen bir baraj su seviyesi tahmin asistanısın. "
+                    "Sen bir baraj su seviyesi tahmin asistanısın."
                     "Istanbul, Bursa, İzmir, Ankara için mevcut su seviyeleri ve 15 günlük hava durumu (özellikle yağış) göz önünde bulundurarak tam 2 hafta sonraki gün için baraj doluluk tahmininde bulun."
                     "Tahminini yaparken insanların eş zamanlı olarak su kullanacaklarını unutma"
                     "Aralık verme direkt net bir yüzdelik ver."
-                    "Cevabını direkt olarak sadece yüzdelik olarak ver, ek açıklama yapma."
+                    "Cevabını Türkçe ver."
+                    "Daha inandırıcı olması için açıklama yapabilirsin."
+                    "Markdown formatında cevap ver."
+                    "Örnek cevap: Hali hazırda alınan tasarruf önlemleri, İstanbul ilinin günlük su tüketimi, 14 günlük detaylı hava durumu, yağışların bölgeleri ve oranları baz alınarak 12 Kasım 2025 tarihinde İstanbul baraj doluluk oranı %41 seviyelerinde olacaktır."
+                    "Baraj doluluk oranı tahmini yaparken yağmurun etkisini abartma. Yağışın barajlara etkisi genellikle sınırlıdır çünkü şehir ve toprak yüzeyleri suyun büyük kısmını emer veya akışa geçirir. 5 gün boyunca aralıksız yağmur yağsa bile, baraj doluluk oranı en fazla %0.2 – %0.3 artar. Gerçek doluluk artışında asıl belirleyici faktör kar yağışı ve bu karın erime sürecidir. Bu nedenle kısa vadeli (örneğin 1–5 günlük) yağmurlu hava tahminleri baraj seviyesini ciddi ölçüde değiştirmez."
+		            "Model, tahmin üretirken yağmurun etkisini düşük; kar yağışının etkisini ise yüksek ağırlıkla değerlendirmelidir."
+	            	"Ayrıca kar erimesi dönemlerinde (özellikle sıcaklık 0°C’nin üstüne çıktığında) doluluk oranında artışlar beklenmelidir."
                 ),
             },
             {
@@ -426,56 +387,41 @@ def deepseek_summary_week(current_levels, weather_by_city):
             },
         ],
     }
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            data=json.dumps(payload),
-            timeout=25,
-        )
-        if resp.status_code != 200:
-            return None
-        data = resp.json()
-        msg = data.get("choices", [{}])[0].get("message", {}).get("content")
-        if not msg:
-            return None
-        msg = " ".join(msg.strip().split())
-        words = msg.split()
-        if len(words) > 50:
-            msg = " ".join(words[:50])
-        prefix = "Yapay zeka yorumu (tamamen AI tahmini):"
-        if not msg.startswith(prefix):
-            msg = f"{prefix} {msg}"
-        return msg
-    except Exception:
+    resp = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(payload),
+        timeout=25,
+    )
+    if resp.status_code != 200:
         return None
+    data = resp.json()
+    msg = data.get("choices", [{}])[0].get("message", {}).get("content")
+    if not msg:
+        return None
+    return " ".join(msg.strip().split())
 
-# Fetch weather, build AI summary, then post tweet and save JSON
-try:
-    weather_by_city = fetch_all_accuweather()
-    # Derle mevcut baraj oranları
-    current_levels = {
-        "İstanbul": round(float(ratio1_num), 2),
-        "Bursa": round(float(ratio2_num), 2),
-        "İzmir": round(float(ratio3_num), 2),
-        "Ankara": round(float(ratio4_num), 2),
-    }
-    ai_note = deepseek_summary_week(current_levels, weather_by_city)
-    if ai_note:
-        # Mevcut metne ekle, 270 karakteri aşma
-        base = tweet_text
-        sep = " — "
-        available = 270 - len(base) - len(sep)
-        if available > 10:
-            tweet_text = base + sep + ai_note[:available]
-        else:
-            tweet_text = base
-    # Artık paylaş
-    post_image_to_x(png_path, tweet_text)
-    # JSON kaydet
-    save_weather_json(weather_by_city)
-except Exception as e:
-    print(f"\033[93mAccuWeather/DeepSeek işlemi sırasında hata: {e}\033[0m")
+weather_by_city = fetch_all_accuweather()
+weather_json_path = save_weather_json(weather_by_city)
+with open(weather_json_path, "r", encoding="utf-8") as weather_file:
+    weather_for_ai = json.load(weather_file)
+
+current_levels = {
+    "İstanbul": round(float(ratio1_num), 2),
+    "Bursa": round(float(ratio2_num), 2),
+    "İzmir": round(float(ratio3_num), 2),
+    "Ankara": round(float(ratio4_num), 2),
+}
+ai_note = deepseek_summary_week(current_levels, weather_for_ai)
+if ai_note:
+    ts_iso = datetime.now()
+    ts_display = ts_iso.strftime("%Y-%m-%d %H:%M:%S")
+    txt_filename = f"deepseek_summary_{ts_iso.strftime('%Y%m%d_%H%M%S')}.md"
+    with open(txt_filename, "w", encoding="utf-8") as txt_file:
+        txt_file.write(f"# Yapay Zeka Tahmini ({ts_display})\n\n")
+        txt_file.write(ai_note + "\n")
+    log(f"AI tahmini '{txt_filename}' dosyasına kaydedildi.")
+post_image_to_x(png_path, tweet_text)
